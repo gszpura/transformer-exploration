@@ -9,3 +9,5 @@ wandb/
 *.egg-info/
 uv.lock
 plans/
+.env
+session

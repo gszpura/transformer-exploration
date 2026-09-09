@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.wandb/
+wandb/
+.pytest_cache/
+.idea/
+*.egg-info/
+uv.lock
+plans/

@@ -9,10 +9,10 @@ from typing import Optional
 import numpy as np
 import random
 import matplotlib.pyplot as plt
+from sklearn.datasets import make_moons
 
 
 class Scalar:
-
     def __init__(self, v: int | float, name: Optional[str] = None):
         self.data = v
         self.grad = 0
@@ -20,25 +20,25 @@ class Scalar:
         self._backward = lambda: None
         self.name = name
 
-    def __add__(self, other: 'int | float | Scalar'):
+    def __add__(self, other: "int | float | Scalar"):
         if not isinstance(other, Scalar):
             other = Scalar(other)
-        merged_name = f'({self.name or ""}+{other.name or ""})'
+        merged_name = f"({self.name or ''}+{other.name or ''})"
         out = Scalar(self.data + other.data, merged_name)
         out._prev = {self, other}
 
         def _back():
-            print("_back for:", out.data, "grad:", out.grad)
             self.grad += out.grad
             other.grad += out.grad
+
         out._backward = _back
 
         return out
 
-    def __sub__(self, other: 'int | float | Scalar'):
+    def __sub__(self, other: "int | float | Scalar"):
         if not isinstance(other, Scalar):
             other = Scalar(other)
-        merged_name = f'({self.name or ""}-{other.name or ""})'
+        merged_name = f"({self.name or ''}-{other.name or ''})"
         out = Scalar(self.data - other.data, merged_name)
         out._prev = {self, other}
 
@@ -58,46 +58,54 @@ class Scalar:
     def __rsub__(self, other: int | float):
         return Scalar(other) - self
 
-    def __mul__(self, other: 'int | float | Scalar'):
+    def __mul__(self, other: "int | float | Scalar"):
         if not isinstance(other, Scalar):
             other = Scalar(other)
-        merged_name = f'({self.name or ""}*{other.name or ""})'
+        merged_name = f"({self.name or ''}*{other.name or ''})"
         out = Scalar(self.data * other.data, merged_name)
         out._prev = {self, other}
 
         def _back():
             self.grad += other.data * out.grad
             other.grad += self.data * out.grad
+
         out._backward = _back
         return out
 
-    def __truediv__(self, other: 'int | float | Scalar'):
+    def __truediv__(self, other: "int | float | Scalar"):
         if not isinstance(other, Scalar):
             other = Scalar(other)
-        inv = other**(-1)
+        inv = other ** (-1)
         return self.__mul__(inv)
 
-    def __pow__(self, other: 'int | float'):
-        merged_name = f'({self.name or ""}^{other})'
-        out = Scalar(self.data ** other, merged_name)
+    def __pow__(self, other: "int | float"):
+        merged_name = f"({self.name or ''}^{other})"
+        out = Scalar(self.data**other, merged_name)
         out._prev = {self}
 
         def _back():
-            self.grad += other*self.data**(other-1) * out.grad
+            self.grad += other * self.data ** (other - 1) * out.grad
+
         out._backward = _back
         return out
 
-    def tanh(self) -> 'Scalar':
-        h_tan_value = (math.exp(self.data) - math.exp(-self.data)) / (math.exp(self.data) + math.exp(-self.data))
+    def tanh(self) -> "Scalar":
+        h_tan_value = (math.exp(self.data) - math.exp(-self.data)) / (
+            math.exp(self.data) + math.exp(-self.data)
+        )
         out = Scalar(h_tan_value, f"tanh({self.name or ''})")
         out._prev = {self}
 
         def _back():
-            self.grad += (1 - h_tan_value**2)*out.grad
+            self.grad += (1 - h_tan_value**2) * out.grad
+
         out._backward = _back
         return out
 
     def frepr(self):
+        return f"<v:{self.data}/gd:{self.grad}>"
+
+    def freprname(self):
         return f"<v:{self.data}/gd:{self.grad}/name:{self.name or ''}>"
 
     def __repr__(self):
@@ -139,7 +147,6 @@ class Scalar:
 
 
 class Neuron:
-
     def __init__(self, w: list[Scalar], b: Scalar):
         self.w = w
         self.b = b
@@ -151,7 +158,9 @@ class Neuron:
         res = tanh(a*w + b)
         """
         self.inputs = inputs
-        self.value = sum([self.inputs[i]*self.w[i] for i in range(len(self.w))], self.b).tanh()
+        self.value = sum(
+            [self.inputs[i] * self.w[i] for i in range(len(self.w))], self.b
+        ).tanh()
         return self.value
 
     def backward(self):
@@ -162,9 +171,11 @@ class Neuron:
 
 
 class Layer:
-
     def __init__(self, inp_size: int, out_size: int):
-        self.neurons: list[Neuron] = [Neuron(self._weights(inp_size), Scalar(random.uniform(-1, 1))) for i in range(out_size)]
+        self.neurons: list[Neuron] = [
+            Neuron(self._weights(inp_size), Scalar(random.uniform(-1, 1)))
+            for i in range(out_size)
+        ]
 
     def _weights(self, inp_size: int):
         return [Scalar(n.item()) for n in np.random.uniform(-1, 1, inp_size)]
@@ -183,7 +194,6 @@ class Layer:
 
 
 class Network:
-
     def __init__(self, layer_sizes: list[int]):
         self.layers: list[Layer] = []
         for layer_no in range(len(layer_sizes) - 1):
@@ -212,13 +222,18 @@ class Network:
 
 
 class MSELoss:
+    """
+    MSELoss for multiple examples with single neuron output and single y_true value (i.e. 2D setup)
+    """
 
     def __init__(self):
         self.partials: list[Scalar] = []
         self.value = Scalar(0)
 
-    def __call__(self, results: list[Scalar], example: list[Scalar]):
-        self.partials: list[Scalar] = [(results[i] - example[i]) ** 2 for i in range(len(results))]
+    def __call__(self, results: list[Scalar], examples: list[Scalar]):
+        self.partials: list[Scalar] = [
+            (results[i] - examples[i]) ** 2 for i in range(len(results))
+        ]
         self.value = sum(self.partials, Scalar(0)) / Scalar(len(results))
         return self.value
 
@@ -226,51 +241,71 @@ class MSELoss:
         self.value.backward()
 
 
-def main_old():
-    a = Scalar(3.0)
-    b = Scalar(4.0)
-    c = a + b
-    d = Scalar(2.0)
-    e = c * d
-    e.backward()
-    t = e.topo()
-    print([item.frepr() for item in t])
-
-    print("SECOND")
-    x = Scalar(2.0)
-    y = x * x
-    z = Scalar(3.0)
-    L = z + y
-    # L.backward()
-    print(L.topo())
-
-    print("THIRD")
-    x = Scalar(2.0)
-    y = Scalar(3.0)
-    z = x * y
-    L = z + x
-    # L.backward()
-    print(L.topo())
+def generate_data(n_samples: int = 20) -> list[tuple[list[Scalar], list[Scalar]]]:
+    """
+    20 datapoints, 2 features each (matches 2 input size),
+    binary classification target 0.0 or 1.0 (matches single output neuron).
+    """
+    X, y = make_moons(n_samples=n_samples, noise=0.1, random_state=42)
+    return [
+        ([Scalar(x) for x in row], [Scalar(float(label))]) for row, label in zip(X, y)
+    ]
 
 
-def main():
-    inputs = [Scalar(3, 'a1'), Scalar(2, 'a2')]
-    weights = [Scalar(0.5, 'w1'), Scalar(0.25, 'w2')]
-    bias = Scalar(10, 'b')
+def visualize_data(data: list[tuple[list[Scalar], list[Scalar]]]):
+    X = np.array([[s.data for s in inputs] for inputs, _ in data])
+    y = np.array([target[0].data for _, target in data])
+    plt.scatter(X[:, 0], X[:, 1], c=y, cmap="bwr", edgecolors="k")
+    plt.xlabel("x0")
+    plt.ylabel("x1")
+    plt.title("make_moons data")
+    plt.show()
+
+
+def neuron_example():
+    inputs = [Scalar(3, "a1"), Scalar(2, "a2")]
+    weights = [Scalar(0.5, "w1"), Scalar(0.25, "w2")]
+    bias = Scalar(10, "b")
     n = Neuron(weights, bias)
     result = n.forward(inputs)
     result.backward()
     print("Topo", result.topo())
     print("=====================================")
-    net = Network([2, 3, 4, 1])
-    res = net.forward([Scalar(0.9, 'a1'), Scalar(0.1, 'a2')])
-    print(res)
+
+
+def main():
+    """
+    TODO:
+    - implement BCELoss
+    - abstract GD and partial GD,
+    - can minibatch be implemented with current approach?
+    exc02:
+    - implement Network with parallel computations and minibatches
+    :return:
+    """
+    net = Network([2, 10, 10, 1])
+    lr = 0.02
+    epochs = 70
     loss = MSELoss()
-    loss_value = loss(res, [Scalar(3)])
-    print(loss_value)
-    loss_value.backward()
-    print(net.parameters()[4])
-    # now the training loop and perhpash MSELoss improvement
+    data = generate_data(n_samples=50)
+    visualize_data(data)
+    for epoch in range(epochs):
+        total_loss = 0
+        for x, y in data:
+            res = net.forward(x)
+            loss_value = loss(res, y)
+            net.zero_grad()
+            loss_value.backward()
+
+            for param in net.parameters():
+                param.data -= lr * param.grad
+            total_loss += loss_value.data
+
+        print(f"Epoch: {epoch}; loss value:", total_loss / len(data))
+    print("PRED:", net.forward([Scalar(0), Scalar(0.25)]))
+    print("PRED:", net.forward(data[0][0]), "y:", data[0][1])
+    print("PRED:", net.forward(data[10][0]), "y:", data[10][1])
+
 
 if __name__ == "__main__":
     main()

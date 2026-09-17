@@ -5,6 +5,7 @@ dd / dc = 1
 
 import math
 from typing import Optional
+import time
 
 import numpy as np
 import random
@@ -166,7 +167,7 @@ class Neuron:
     def backward(self):
         self.value.backward()
 
-    def parameters(self):
+    def parameters(self) -> list[Scalar]:
         return self.w + [self.b]
 
 
@@ -186,7 +187,7 @@ class Layer:
             res.append(neuron.forward(inputs))
         return res
 
-    def parameters(self):
+    def parameters(self) -> list[Scalar]:
         params = []
         for n in self.neurons:
             params.extend(n.parameters())
@@ -209,7 +210,7 @@ class Network:
             inp = new_inp
         return inp
 
-    def parameters(self):
+    def parameters(self) -> list[Scalar]:
         params = []
         for layer in self.layers:
             params.extend(layer.parameters())
@@ -219,6 +220,14 @@ class Network:
         params = self.parameters()
         for p in params:
             p.grad = 0
+
+    def grad_check(self):
+        params = self.parameters()
+        grads_sum = 0
+        for i in range(0, 10):
+            r = random.randint(0, len(params) - 1)
+            grads_sum += params[r].grad
+        print("Gradient sum over 10 random weights in net:", grads_sum)
 
 
 class MSELoss:
@@ -262,23 +271,81 @@ def visualize_data(data: list[tuple[list[Scalar], list[Scalar]]]):
     plt.show()
 
 
-def neuron_example():
-    inputs = [Scalar(3, "a1"), Scalar(2, "a2")]
-    weights = [Scalar(0.5, "w1"), Scalar(0.25, "w2")]
-    bias = Scalar(10, "b")
-    n = Neuron(weights, bias)
-    result = n.forward(inputs)
-    result.backward()
-    print("Topo", result.topo())
-    print("=====================================")
+def eval_net_on_data(net: Network, data: list[tuple[list[Scalar], list[Scalar]]]):
+    hit = 0.0
+    for x, y in data:
+        out = net.forward(x)
+        print(out[0].data, "vs.", y[0].data)
+        hit += abs(abs(round(out[0].data) - y[0].data) - 1)
+    print("accuracy:", hit / len(data))
+
+
+def gradient_descent(lr: float, data: list[tuple[list[Scalar], list[Scalar]]], net: Network, loss: MSELoss):
+    """
+    Single run over data with pure gradient descent
+    """
+    total_loss = 0
+    for x, y in data:
+        res = net.forward(x)
+        loss_value = loss(res, y)
+        net.zero_grad()
+        loss_value.backward()
+
+        for param in net.parameters():
+            param.data -= lr * param.grad
+        total_loss += loss_value.data
+    return total_loss / len(data)
+
+
+def dropout_gradient_descent(lr: float, data: list[tuple[list[Scalar], list[Scalar]]], net: Network, loss: MSELoss):
+    """
+    Single run over data with dropout gradient descent
+    """
+    total_loss = 0
+    for x, y in data:
+        res = net.forward(x)
+        loss_value = loss(res, y)
+        net.zero_grad()
+        loss_value.backward()
+
+        part_of_params = random.sample(net.parameters(), len(net.parameters()) // 2)
+        for param in part_of_params:
+            param.data -= lr * param.grad
+        total_loss += loss_value.data
+    return total_loss / len(data)
+
+
+def stochastic_gradient_descent(lr: float, data: list[tuple[list[Scalar], list[Scalar]]], net: Network, loss: MSELoss, batch_size: Optional[int] = None):
+    """
+    Single run over data with SGD
+    """
+    data = random.sample(data, len(data))
+    data_size = len(data)
+    batch_size = batch_size or 16
+    final_loss = math.inf
+    for batch_floor in range(0, data_size, batch_size):
+        batch = data[batch_floor:batch_floor+batch_size]
+        # print(f"Running for batch_floor: {batch_floor}, batch_size: {len(batch)}")
+        if len(batch) == 0:
+            return final_loss
+        total_loss = 0
+        net.grad_check()
+        net.zero_grad()
+        for x, y in batch:
+            res = net.forward(x)
+            loss_value = loss(res, y)
+            loss_value.backward()
+            total_loss += loss_value.data
+        for param in net.parameters():
+            param.data -= lr * param.grad
+        final_loss = total_loss / len(batch)
+    return final_loss
 
 
 def main():
     """
     TODO:
     - implement BCELoss
-    - abstract GD and partial GD,
-    - can minibatch be implemented with current approach?
     exc02:
     - implement Network with parallel computations and minibatches
     :return:
@@ -287,24 +354,18 @@ def main():
     lr = 0.02
     epochs = 70
     loss = MSELoss()
-    data = generate_data(n_samples=50)
-    visualize_data(data)
+    data = generate_data(n_samples=64 + 32)
+    train_data, test_data = data[0:64], data[64:]
+    visualize_data(train_data)
+    start_time = time.perf_counter()
     for epoch in range(epochs):
-        total_loss = 0
-        for x, y in data:
-            res = net.forward(x)
-            loss_value = loss(res, y)
-            net.zero_grad()
-            loss_value.backward()
+        # unit_loss = stochastic_gradient_descent(lr, train_data, net, loss, batch_size=16)
+        unit_loss = dropout_gradient_descent(lr, train_data, net, loss)
+        print(f"Epoch: {epoch}; loss value:", unit_loss)
+    end_time = time.perf_counter()
+    print(f"Finished in: {end_time - start_time:.2f}s")
+    eval_net_on_data(net, test_data)
 
-            for param in net.parameters():
-                param.data -= lr * param.grad
-            total_loss += loss_value.data
-
-        print(f"Epoch: {epoch}; loss value:", total_loss / len(data))
-    print("PRED:", net.forward([Scalar(0), Scalar(0.25)]))
-    print("PRED:", net.forward(data[0][0]), "y:", data[0][1])
-    print("PRED:", net.forward(data[10][0]), "y:", data[10][1])
 
 
 if __name__ == "__main__":

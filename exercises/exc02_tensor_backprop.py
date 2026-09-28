@@ -1,10 +1,10 @@
-from typing import Optional
+from typing import Optional, Iterable, Sized
 
 import numpy as np
-from sklearn.datasets import make_moons
+from sklearn.datasets import make_blobs, make_moons
+
 
 class Tensor:
-
     def __init__(self, data: np.ndarray, grad: Optional[np.ndarray] = None):
         self.data = data
         self.grad = grad if grad is not None else np.zeros_like(self.data)
@@ -44,7 +44,7 @@ class Tensor:
         return Tensor(np.tanh(item.data))
 
     @staticmethod
-    def tanh_dv(x: 'np.ndarray | Tensor') -> np.ndarray:
+    def tanh_dv(x: "np.ndarray | Tensor") -> np.ndarray:
         if isinstance(x, Tensor):
             x = x.data
         t = np.tanh(x)
@@ -54,10 +54,11 @@ class Tensor:
         return Tensor(self.data.squeeze())
 
 
-
 class Network:
     """
     Network based on Tensor class
+
+    Tanh and MSE are still hardcoded. TODO: BCE and ReLU implementation
     """
 
     def __init__(self, layer_sizes: list[int]):
@@ -77,7 +78,9 @@ class Network:
 
         for i, shape in enumerate(layer_sizes):
             if i < len(layer_sizes) - 1:
-                self.w.append(Tensor(np.random.rand(layer_sizes[i], layer_sizes[i + 1])))
+                self.w.append(
+                    Tensor(np.random.rand(layer_sizes[i], layer_sizes[i + 1]))
+                )
             self.b.append(Tensor(np.random.rand(1, layer_sizes[i])))
             self.z.append(Tensor(np.random.rand(1, layer_sizes[i])))
             self.a.append(Tensor(np.random.rand(1, layer_sizes[i])))
@@ -110,13 +113,24 @@ class Network:
         t = np.tanh(x)
         return 1 - t**2
 
-    def mse(self, val, true_val):
-        return (val - true_val)**2
+    def mse(self, val: 'np.ndarray | Tensor', true_val: 'np.ndarray | Tensor'):
+        """
+        MSE for one number:
+            (val - true)**2
 
-    def mse_dv(self, val, true_val):
-        return 2*(val - true_val)
+        MSE for multi-class:
+            sum((val - true)**2)/C
+        where C is number of classes - this is what np.mean does
+        """
+        return np.mean((val - true_val) ** 2)
 
-    def backward(self, true_value: float):
+    def mse_dv(self, val: 'np.ndarray | Tensor', true_val: 'np.ndarray | Tensor | float') -> 'np.ndarray | Tensor':
+        ln = 1
+        if isinstance(true_val, Sized):
+            ln = len(true_val)
+        return 2 * (val - true_val) / ln
+
+    def backward(self, true_value: np.ndarray):
         """
         a, b, z:
         (1, 2), (1, 4), (1, 4), (1, 1)
@@ -133,19 +147,16 @@ class Network:
         dw = a^T @ dz
         """
         loss = self.mse(self.a[-1].data, true_value)
-        # print("loss:", loss)
         # d(a3 - y)²/da3 = 2*(a3 - y)
-        mse_dev = 1 * self.mse_dv(self.a[-1].data.item(), true_value)
-        # shape: (1, 1)
-        self.a[-1].grad = np.array([mse_dev]).reshape(1, 1)
+        self.a[-1].grad += self.mse_dv(self.a[-1].data, true_value) * 1
 
         # we do not propagate gradients to input layer so we iterate only to 1 not to 0
         for i in range(len(self.sizes))[::-1][:-1]:
             # each component has prev layer grad and derivative w.r.t. its node
-            self.z[i].grad = self.a[i].grad * Tensor.tanh_dv(self.z[i].data).data
-            self.b[i].grad = self.z[i].grad * 1
-            self.w[i-1].grad = self.a[i-1].data.T @ self.z[i].grad
-            self.a[i-1].grad = self.z[i].grad @ self.w[i-1].data.T
+            self.z[i].grad += self.a[i].grad * Tensor.tanh_dv(self.z[i].data).data
+            self.b[i].grad += self.z[i].grad * 1
+            self.w[i - 1].grad += self.a[i - 1].data.T @ self.z[i].grad
+            self.a[i - 1].grad += self.z[i].grad @ self.w[i - 1].data.T
         return loss
 
     def parameters(self) -> list[Tensor]:
@@ -162,17 +173,39 @@ class Network:
             p.grad = np.zeros_like(p.grad)
 
 
-
-def generate_2d_data(n_samples: int = 20) -> list[tuple[np.ndarray, float]]:
+def generate_2d_data(n_samples: int = 20, one_hot = False) -> list[tuple[np.ndarray, np.ndarray]]:
     """
     20 datapoints, 2 features each (matches 2 input size),
     binary classification target 0.0 or 1.0 (matches single output neuron).
     """
     X, y = make_moons(n_samples=n_samples, noise=0.1, random_state=42)
+    y_onehot = np.eye(2)[y]
+    if one_hot:
+        y = y_onehot
     return [(row.reshape(1, 2), label) for row, label in zip(X, y)]
 
 
-def sgd(net: Network, data: list[tuple], lr = 0.05):
+def generate_3d_data(
+    n_samples: int = 30, n_classes: int = 3, **kwargs
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    30 datapoints, 3 features each (matches 3 input size),
+    one-hot target (1, n_classes) (matches n_classes output neurons, for softmax + CE).
+    """
+    X, y = make_blobs(
+        n_samples=n_samples,
+        centers=n_classes,
+        n_features=3,
+        cluster_std=1.5,
+        random_state=42,
+    )
+    one_hot = np.eye(n_classes)[y]
+    return [
+        (row.reshape(1, 3), one_hot[i].reshape(1, n_classes)) for i, row in enumerate(X)
+    ]
+
+
+def sgd(net: Network, data: list[tuple], lr=0.05):
     """
     mini-batch of size 1
     """
@@ -185,20 +218,20 @@ def sgd(net: Network, data: list[tuple], lr = 0.05):
         # update
         params = net.parameters()
         for param in params:
-            param.data -= lr*param.grad
+            param.data -= lr * param.grad
         total_loss += loss
     return total_loss / len(data)
 
 
-def gradient_descent(net: Network, data: list[tuple], lr = 0.05):
+def gradient_descent(net: Network, data: list[tuple], lr=0.05):
     """
     full grad desc = full batch of all examples
     """
     total_loss = 0
+    net.zero_grad()
     for example in data:
         input_values, y = example
         net.forward(input_values)
-        net.zero_grad()
         loss = net.backward(y)
         total_loss += loss
     # update once
@@ -210,9 +243,9 @@ def gradient_descent(net: Network, data: list[tuple], lr = 0.05):
 
 if __name__ == "__main__":
     np.random.seed(42)
-    net = Network([2, 8, 6, 1])
-    data = generate_2d_data(20)
+    net = Network([3, 8, 6, 3])
+    data = generate_3d_data(20, one_hot=True)
     for epoch in range(300):
         loss = sgd(net, data, 0.03)
-        # loss = gradient_descent(net, data, 0.05)
+        # loss = gradient_descent(net, data, 0.03)
         print(f"Loss at epoch: {epoch}: {loss}")

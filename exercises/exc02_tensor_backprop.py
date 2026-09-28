@@ -1,6 +1,7 @@
 from typing import Optional
 
 import numpy as np
+from sklearn.datasets import make_moons
 
 class Tensor:
 
@@ -35,15 +36,19 @@ class Tensor:
     def __getitem__(self, key):
         return Tensor(data=self.data[key], grad=self.grad[key])
 
-    def set_grad_to(self, key, grad):
-        self.grad[key] = grad
-
     def __iter__(self):
         return self.data.__iter__()
 
     @staticmethod
     def tanh(item):
         return Tensor(np.tanh(item.data))
+
+    @staticmethod
+    def tanh_dv(x: 'np.ndarray | Tensor') -> np.ndarray:
+        if isinstance(x, Tensor):
+            x = x.data
+        t = np.tanh(x)
+        return Tensor(1 - t**2)
 
     def squeeze(self):
         return Tensor(self.data.squeeze())
@@ -52,26 +57,30 @@ class Tensor:
 
 class Network:
     """
-    TODO:
-    - remove for loops from backward
-    - make it smooth for any MLP arch
+    Network based on Tensor class
     """
 
-    def __init__(self):
+    def __init__(self, layer_sizes: list[int]):
         """
-        Predefined size of network layers: [2, 4, 4, 1].
-        z and b should match the shape of a
+        Layer sizes [2, 4, 4, 1]
+        mean there's one output neuron and 2 input neurons and 2 hidden layers with 4 and 4 neurons.
+        z and b match the shape of a.
+
+        Best practise is to have all layers 2-dimensional - even if they're just a list of 1dim neurons i.e.
+        it is better to have layer shape like: (1, 4) than (4, )
         """
-        self.w1 = Tensor(np.random.rand(2, 4))
-        self.b1 = Tensor(np.random.rand(1, 4))
-        self.z1 = Tensor(np.random.rand(1, 4))
-        self.w2 = Tensor(np.random.rand(4, 4))
-        self.b2 = Tensor(np.random.rand(1, 4))
-        self.z2 = Tensor(np.random.rand(1, 4))
-        self.w3 = Tensor(np.random.rand(4, 1))
-        self.b3 = Tensor(np.random.rand(1, 1))
-        self.z3 = Tensor(np.random.rand(1, 1))
-        self._acts = [Tensor(np.zeros(4)), Tensor(np.zeros(4)), Tensor(np.zeros(1))]
+        self.w = []
+        self.b = []
+        self.z = []
+        self.a = []
+        self.sizes = layer_sizes
+
+        for i, shape in enumerate(layer_sizes):
+            if i < len(layer_sizes) - 1:
+                self.w.append(Tensor(np.random.rand(layer_sizes[i], layer_sizes[i + 1])))
+            self.b.append(Tensor(np.random.rand(1, layer_sizes[i])))
+            self.z.append(Tensor(np.random.rand(1, layer_sizes[i])))
+            self.a.append(Tensor(np.random.rand(1, layer_sizes[i])))
 
     def forward(self, a0: np.ndarray):
         """
@@ -85,15 +94,17 @@ class Network:
         (1, 4) x (4, 4) -> (1, 4)
         (1, 4) x (4, 1) -> (1, 1)
         """
-        a0 = Tensor(a0)
-        self.z1 = a0 @ self.w1 + self.b1
-        a1 = Tensor.tanh(self.z1)
-        self.z2 = a1 @ self.w2  + self.b2
-        a2 = Tensor.tanh(self.z2)
-        self.z3 = a2 @ self.w3 + self.b3
-        a3 = Tensor.tanh(self.z3)
-        self._acts = [a0, a1, a2, a3]
-        return a3
+        if a0.shape != self.a[0].data.shape:
+            raise Exception("Wrong shapes for input layer")
+
+        self.a[0].data = a0
+
+        for i in range(len(self.sizes))[1:]:
+            # z1 = a0 @ w0 + b1
+            # a1 = tanh(z1)
+            self.z[i] = self.a[i - 1] @ self.w[i - 1] + self.b[i]
+            self.a[i] = Tensor.tanh(self.z[i])
+        return self.a[-1]
 
     def tanh_dv(self, x: np.ndarray) -> np.ndarray:
         t = np.tanh(x)
@@ -120,53 +131,88 @@ class Network:
         backward
         dz = da * tanh_dv(z)
         dw = a^T @ dz
-
-        a2 @ dz3 -> dw3:
-        (1, 4)^T @ (1, 1)^T -> (4, 1)
-
-        so standard way: dw = a^T @ dz
-
-        z&b should be the same shape as a!
         """
-        loss = self.mse(self._acts[3].data, true_value)
-        print("loss:", loss)
+        loss = self.mse(self.a[-1].data, true_value)
+        # print("loss:", loss)
         # d(a3 - y)²/da3 = 2*(a3 - y)
-        mse_dev = 1 * self.mse_dv(self._acts[3].data.item(), true_value)
+        mse_dev = 1 * self.mse_dv(self.a[-1].data.item(), true_value)
         # shape: (1, 1)
-        self._acts[3].grad = np.array([mse_dev]).reshape(1, 1)
+        self.a[-1].grad = np.array([mse_dev]).reshape(1, 1)
 
-        # a3, z3, b3, w3
-        self.z3.grad = self._acts[3].grad*self.tanh_dv(self.z3.data)
-        self.b3.grad = self.z3.grad*1
-        # w3 has shape (4, 1): (4, 1) x (1, 1) -> (4, 1)
-        self.w3.grad = self._acts[2].data.T @ self.z3.grad
-
-        # a2, z2, b2, w2
-        # a2 has shape (1, 4): (1, 1) x (1, 4) -> (1, 4)
-        self._acts[2].grad = self.z3.grad @ self.w3.data.T
-        # z2 has shape (1, 4): (1, 4) * (1, 4) (note: std mul, not matmul!)
-        self.z2.grad = self._acts[2].grad * self.tanh_dv(self.z2.data)
-        self.b2.grad = self.z2.grad * 1
-        # w2 has shape (4, 4): (4, 1) x (1, 4)
-        self.w2.grad = self._acts[1].data.T @ self.z2.grad
-
-        # a1, z1, b1
-        self._acts[1].grad = self.z2.grad @ self.w2.data.T
-        self.z1.grad = self._acts[1].grad * self.tanh_dv(self.z1.data)
-        self.b1.grad = self.z1.grad * 1
-        self.w1.grad = self._acts[0].data.T @ self.z1.grad
-
-        # a0
-        self._acts[0].grad = self.z1.grad @ self.w1.data.T
+        # we do not propagate gradients to input layer so we iterate only to 1 not to 0
+        for i in range(len(self.sizes))[::-1][:-1]:
+            # each component has prev layer grad and derivative w.r.t. its node
+            self.z[i].grad = self.a[i].grad * Tensor.tanh_dv(self.z[i].data).data
+            self.b[i].grad = self.z[i].grad * 1
+            self.w[i-1].grad = self.a[i-1].data.T @ self.z[i].grad
+            self.a[i-1].grad = self.z[i].grad @ self.w[i-1].data.T
         return loss
+
+    def parameters(self) -> list[Tensor]:
+        params = []
+        for w in self.w:
+            params.append(w)
+        for b in self.b:
+            params.append(b)
+        return params
+
+    def zero_grad(self):
+        params = self.parameters()
+        for p in params:
+            p.grad = np.zeros_like(p.grad)
+
+
+
+def generate_2d_data(n_samples: int = 20) -> list[tuple[np.ndarray, float]]:
+    """
+    20 datapoints, 2 features each (matches 2 input size),
+    binary classification target 0.0 or 1.0 (matches single output neuron).
+    """
+    X, y = make_moons(n_samples=n_samples, noise=0.1, random_state=42)
+    return [(row.reshape(1, 2), label) for row, label in zip(X, y)]
+
+
+def sgd(net: Network, data: list[tuple], lr = 0.05):
+    """
+    mini-batch of size 1
+    """
+    total_loss = 0
+    for example in data:
+        input_values, y = example
+        net.forward(input_values)
+        net.zero_grad()
+        loss = net.backward(y)
+        # update
+        params = net.parameters()
+        for param in params:
+            param.data -= lr*param.grad
+        total_loss += loss
+    return total_loss / len(data)
+
+
+def gradient_descent(net: Network, data: list[tuple], lr = 0.05):
+    """
+    full grad desc = full batch of all examples
+    """
+    total_loss = 0
+    for example in data:
+        input_values, y = example
+        net.forward(input_values)
+        net.zero_grad()
+        loss = net.backward(y)
+        total_loss += loss
+    # update once
+    params = net.parameters()
+    for param in params:
+        param.data -= lr * param.grad
+    return total_loss / len(data)
 
 
 if __name__ == "__main__":
     np.random.seed(42)
-    input_values = np.random.rand(2).reshape(1, 2)
-    print("Inputs:", input_values, type(input_values), input_values.shape)
-    net = Network()
-    res = net.forward(input_values)
-    print("RES:", res.data)
-    print("backward matrix:")
-    net.backward(1)
+    net = Network([2, 8, 6, 1])
+    data = generate_2d_data(20)
+    for epoch in range(300):
+        loss = sgd(net, data, 0.03)
+        # loss = gradient_descent(net, data, 0.05)
+        print(f"Loss at epoch: {epoch}: {loss}")

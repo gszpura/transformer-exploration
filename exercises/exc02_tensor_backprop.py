@@ -109,10 +109,6 @@ class Network:
             self.a[i] = Tensor.tanh(self.z[i])
         return self.a[-1]
 
-    def tanh_dv(self, x: np.ndarray) -> np.ndarray:
-        t = np.tanh(x)
-        return 1 - t**2
-
     def mse(self, val: 'np.ndarray | Tensor', true_val: 'np.ndarray | Tensor'):
         """
         MSE for one number:

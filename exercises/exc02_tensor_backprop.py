@@ -84,6 +84,15 @@ class FullLayer:
         return self.a
 
     def backward(self, out_grad: np.ndarray, prev_activations: Tensor):
+        """
+        out_grad comes from previous layer, for last layer it comes from loss
+        for other i-th layer it comes from i+1-th layer
+
+        += is here because of mini-batches of size > 1 where we want to backward multiple times,
+        once per example, before we update weights based on the grads
+
+        return of 'self.z.grad @ self.w.data.T' prev_activation.grad which we'll update in another layer
+        """
         self.a.grad += out_grad
         self.z.grad += out_grad * Tensor.tanh_dv(self.z.data).data
         self.b.grad += self.z.grad * 1
@@ -92,6 +101,71 @@ class FullLayer:
 
     def parameters(self) -> list[Tensor]:
         return [self.w, self.b]
+
+
+class NormLayer:
+
+    def __init__(self, in_size: int):
+        """
+        there are as many a^ as a
+        ahat = (a - mi)/sigma
+
+        """
+        # self.beta = Tensor(np.random.rand(1, in_size))
+        # self.gamma = Tensor(np.random.rand(1, in_size))
+        self.ahat = Tensor(np.random.rand(1, in_size))
+        self.h = Tensor(np.random.rand(1, in_size))
+        self.mi = 0
+        self.sigma = 0
+
+    def __call__(self, input_activations: Tensor) -> Tensor:
+        a = input_activations
+        self.mi = np.mean(a.data)
+        self.sigma = np.sqrt(np.mean([(ai - self.mi)**2 for ai in a.data]))
+        self.ahat = Tensor(data=(a.data - self.mi)/self.sigma)
+        self.h = Tensor.tanh(self.ahat)
+        return self.h
+
+    def backward(self, out_grad: np.ndarray, prev_activations: Tensor):
+        """
+        Heavy derivatives over single pair of input-output nodes:
+        symbolic:
+        daihat/daj = daihat/dai + daihat/dmi*dmi/daj + daihat/dsigma * dsigma/daj
+        values:
+        daihat/daj = 1/sigma*delta_ij - 1/D*sigma -aihat*ajhat/D*sigma
+        (fan in from mi and sigma)
+        where "i" is index from further layer and "j" is index from input layer
+
+        - there's direct influence from when i=j (delta_ij = 1 when i=j)
+        - there indirect influences through mi and sigma when i=j and i!=j
+
+        and for calculating loss correctly we need take into account all "i"s for a given "j"
+        so the sums must appear over upper layer neurons/nodes
+
+        so it looks like this:
+        dL/daj = 1/sigma * (out_grad*1) - 1/(sigma*D)*sumi(out_grad) - ajhat/(sigma*D) * sumi(out_grad*aihat)
+        (fan out)
+
+        derivatives for sigma and mi must be well calculated. Example for mi (second term):
+
+        f' = daihat / dmi * dmi / daj
+
+        daihat / dmi = - 1/sigma
+        dmi / daj = 1 / D
+        f' = - 1/(sigma*D) - as in the equation above - and later we need sum it over i: out_grad*f'
+
+        similar for sigma derivation but this is more difficult with several stages, results:
+        dsigma/daj = 1/2sigma * 2(aj - mi)/D = ajhat/D
+        daihat/dsigma = - 1/sigma * aihat
+        """
+        self.h.grad += out_grad
+        hat_grad = out_grad * Tensor.tanh_dv(self.ahat.data).data
+        self.ahat.grad += hat_grad
+        input_grad = 1/self.sigma * (hat_grad - np.mean(hat_grad) - self.ahat.data*np.mean(hat_grad*self.ahat.data))
+        return input_grad
+
+    def parameters(self) -> list[Tensor]:
+        return []
 
 
 class Network:

@@ -132,7 +132,7 @@ class NormLayer:
         symbolic:
         daihat/daj = daihat/dai + daihat/dmi*dmi/daj + daihat/dsigma * dsigma/daj
         values:
-        daihat/daj = 1/sigma*delta_ij - 1/D*sigma -aihat*ajhat/D*sigma
+        daihat/daj = 1/sigma*delta_ij - 1/(sigma*D) -aihat*ajhat/(sigma*D)
         (fan in from mi and sigma)
         where "i" is index from further layer and "j" is index from input layer
 

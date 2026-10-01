@@ -54,6 +54,46 @@ class Tensor:
         return Tensor(self.data.squeeze())
 
 
+class InputLayer:
+
+    def __init__(self, in_size: int):
+        self.a = Tensor(np.random.rand(1, in_size))
+
+    def __call__(self, input_activations: Tensor):
+        self.a = input_activations
+        return self.a
+
+    def backward(self, **kwargs):
+        return self.a.grad
+
+    def parameters(self):
+        return []
+
+
+class FullLayer:
+
+    def __init__(self, in_size: int, out_size: int):
+        self.w = Tensor(np.random.rand(in_size, out_size))
+        self.b = Tensor(np.random.rand(1, out_size))
+        self.z = Tensor(np.random.rand(1, out_size))
+        self.a = Tensor(np.random.rand(1, out_size))
+
+    def __call__(self, input_activations: Tensor) -> Tensor:
+        self.z = input_activations @ self.w + self.b
+        self.a = Tensor.tanh(self.z)
+        return self.a
+
+    def backward(self, out_grad: np.ndarray, prev_activations: Tensor):
+        self.a.grad += out_grad
+        self.z.grad += out_grad * Tensor.tanh_dv(self.z.data).data
+        self.b.grad += self.z.grad * 1
+        self.w.grad += prev_activations.data.T @ self.z.grad
+        return self.z.grad @ self.w.data.T
+
+    def parameters(self) -> list[Tensor]:
+        return [self.w, self.b]
+
+
 class Network:
     """
     Network based on Tensor class
@@ -70,20 +110,13 @@ class Network:
         Best practise is to have all layers 2-dimensional - even if they're just a list of 1dim neurons i.e.
         it is better to have layer shape like: (1, 4) than (4, )
         """
-        self.w = []
-        self.b = []
-        self.z = []
-        self.a = []
         self.sizes = layer_sizes
+        self.layers = [InputLayer(in_size=self.sizes[0])]
+        self.input_shape = (1, self.sizes[0])
 
         for i, shape in enumerate(layer_sizes):
             if i < len(layer_sizes) - 1:
-                self.w.append(
-                    Tensor(np.random.rand(layer_sizes[i], layer_sizes[i + 1]))
-                )
-            self.b.append(Tensor(np.random.rand(1, layer_sizes[i])))
-            self.z.append(Tensor(np.random.rand(1, layer_sizes[i])))
-            self.a.append(Tensor(np.random.rand(1, layer_sizes[i])))
+                self.layers.append(FullLayer(layer_sizes[i], layer_sizes[i + 1]))
 
     def forward(self, a0: np.ndarray):
         """
@@ -97,17 +130,19 @@ class Network:
         (1, 4) x (4, 4) -> (1, 4)
         (1, 4) x (4, 1) -> (1, 1)
         """
-        if a0.shape != self.a[0].data.shape:
+        if a0.shape != self.layers[0].a.data.shape:
             raise Exception("Wrong shapes for input layer")
+        input_activation = Tensor(data=a0)
+        for layer in self.layers:
+            input_activation = layer(input_activation)
+        return input_activation
 
-        self.a[0].data = a0
+    def get_output(self) -> Tensor:
+        return self.layers[-1].a
 
-        for i in range(len(self.sizes))[1:]:
-            # z1 = a0 @ w0 + b1
-            # a1 = tanh(z1)
-            self.z[i] = self.a[i - 1] @ self.w[i - 1] + self.b[i]
-            self.a[i] = Tensor.tanh(self.z[i])
-        return self.a[-1]
+    def get_result_label(self):
+        a = self.layers[-1].a
+        return np.argmax(a)
 
     def mse(self, val: 'np.ndarray | Tensor', true_val: 'np.ndarray | Tensor'):
         """
@@ -121,6 +156,12 @@ class Network:
         return np.mean((val - true_val) ** 2)
 
     def mse_dv(self, val: 'np.ndarray | Tensor', true_val: 'np.ndarray | Tensor | float') -> 'np.ndarray | Tensor':
+        """
+        d(a_final - y)²/da3 = 2*(a_final - y)
+        :param val:
+        :param true_val:
+        :return:
+        """
         ln = 1
         if isinstance(true_val, Sized):
             ln = len(true_val)
@@ -142,25 +183,18 @@ class Network:
         dz = da * tanh_dv(z)
         dw = a^T @ dz
         """
-        loss = self.mse(self.a[-1].data, true_value)
-        # d(a3 - y)²/da3 = 2*(a3 - y)
-        self.a[-1].grad += self.mse_dv(self.a[-1].data, true_value) * 1
+        loss = self.mse(self.get_output().data, true_value)
+        out_grad = self.mse_dv(self.get_output().data, true_value) * 1
 
-        # we do not propagate gradients to input layer so we iterate only to 1 not to 0
+        # we do not propagate gradients to input layer so we iterate only to 1, not to 0
         for i in range(len(self.sizes))[::-1][:-1]:
-            # each component has prev layer grad and derivative w.r.t. its node
-            self.z[i].grad += self.a[i].grad * Tensor.tanh_dv(self.z[i].data).data
-            self.b[i].grad += self.z[i].grad * 1
-            self.w[i - 1].grad += self.a[i - 1].data.T @ self.z[i].grad
-            self.a[i - 1].grad += self.z[i].grad @ self.w[i - 1].data.T
+            out_grad = self.layers[i].backward(out_grad, self.layers[i - 1].a)
         return loss
 
     def parameters(self) -> list[Tensor]:
         params = []
-        for w in self.w:
-            params.append(w)
-        for b in self.b:
-            params.append(b)
+        for layer in self.layers:
+            params.extend(layer.parameters())
         return params
 
     def zero_grad(self):
@@ -237,11 +271,29 @@ def gradient_descent(net: Network, data: list[tuple], lr=0.05):
     return total_loss / len(data)
 
 
+def eval_net_on_data(net: Network, data: list[tuple[np.ndarray, np.ndarray]]):
+    hit = 0.0
+    for x, y in data:
+        out = net.forward(x)
+        # print(out.data, "vs.", y)
+        hit += np.argmax(out.data) == np.argmax(y)
+    print("accuracy:", hit / len(data))
+
+
 if __name__ == "__main__":
+    """
+    Old approach (calculations in the network class):
+    Loss at epoch: 0: 1.0656959704649467
+    Loss at epoch: 10: 0.0736419422662655
+    Loss at epoch: 299: 0.00021114038526854226
+    """
     np.random.seed(42)
     net = Network([3, 8, 6, 3])
-    data = generate_3d_data(20, one_hot=True)
+    data = generate_3d_data(100, one_hot=True)
+    train, test = data[:70], data[70:]
     for epoch in range(300):
-        loss = sgd(net, data, 0.03)
+        loss = sgd(net, train, 0.03)
         # loss = gradient_descent(net, data, 0.03)
         print(f"Loss at epoch: {epoch}: {loss}")
+    eval_net_on_data(net, test)
+    eval_net_on_data(net, train)
